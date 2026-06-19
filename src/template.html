@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NUT UPS Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-main: #0b0f17;
+            --bg-card: #131822;
+            --border: #222b3c;
+            --text-primary: #f0f4f8;
+            --text-secondary: #6272a4;
+            --accent-blue: #00e5ff;
+            --accent-purple: #bd93f9;
+            --success: #50fa7b;
+            --warning: #ffb86c;
+            --danger: #ff5555;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-primary);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .dashboard {
+            width: 100%;
+            max-width: 650px;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 20px;
+            margin-bottom: 28px;
+        }
+
+        header h1 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: #ffffff;
+        }
+
+        header p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+            margin-top: 4px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 480px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+
+        .card {
+            background: linear-gradient(145deg, rgba(255,255,255,0.01), rgba(255,255,255,0.03));
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .card-full {
+            grid-column: span 2;
+        }
+        @media (max-width: 480px) {
+            .card-full { grid-column: span 1; }
+        }
+
+        .card-label {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .card-value {
+            font-size: 1.6rem;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+            color: #ffffff;
+        }
+
+        .card-subtext {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .status-badge {
+            padding: 6px 14px;
+            border-radius: 30px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-align: center;
+        }
+        .status-online { background-color: rgba(80, 250, 123, 0.15); color: var(--success); border: 1px solid rgba(80, 250, 123, 0.3); }
+        .status-battery { background-color: rgba(255, 184, 108, 0.15); color: var(--warning); border: 1px solid rgba(255, 184, 108, 0.3); }
+        .status-critical { background-color: rgba(255, 85, 85, 0.15); color: var(--danger); border: 1px solid rgba(255, 85, 85, 0.3); }
+        .status-unknown { background-color: rgba(98, 114, 164, 0.15); color: var(--text-secondary); border: 1px solid var(--border); }
+
+        .progress-wrapper {
+            width: 100%;
+            margin-top: 8px;
+        }
+        .progress-bg {
+            width: 100%;
+            height: 6px;
+            background-color: #1e2530;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .progress-fill-charge {
+            height: 100%;
+            width: {charge_pct}%;
+            background: linear-gradient(90deg, var(--accent-blue), #0077ff);
+            transition: width 0.6s ease;
+        }
+        .progress-fill-load {
+            height: 100%;
+            width: {load_pct}%;
+            background: linear-gradient(90deg, var(--accent-purple), #7928ca);
+            transition: width 0.6s ease;
+        }
+
+        footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid var(--border);
+            padding-top: 20px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .links {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .links a {
+            color: var(--accent-blue);
+            text-decoration: none;
+            border: 1px solid var(--border);
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+
+        .links a:hover {
+            background-color: rgba(0, 229, 255, 0.1);
+        }
+
+        .btn-refresh {
+            background-color: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            font-family: inherit;
+            transition: all 0.2s ease;
+        }
+
+        .btn-refresh:hover {
+            background-color: var(--border);
+            border-color: var(--text-secondary);
+        }
+    </style>
+    <script>
+        // Auto-refresh HTML dashboard every 10s
+        setInterval(() => { window.location.reload(); }, 10000);
+    </script>
+</head>
+<body>
+    <div class="dashboard">
+        <header>
+            <div>
+                <h1>{mfr_model}</h1>
+                <p>Node: {ups_name}@{ups_host}</p>
+            </div>
+            <span class="status-badge {status_class}">{ups_status}</span>
+        </header>
+
+        <div class="grid">
+            <div class="card card-full">
+                <div>
+                    <div class="card-label">Battery Level</div>
+                    <div class="card-value">{battery_charge}%</div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bg"><div class="progress-fill-charge"></div></div>
+                </div>
+            </div>
+
+            <div class="card card-full">
+                <div>
+                    <div class="card-label">Load Capacity</div>
+                    <div class="card-value">{ups_load}%</div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bg"><div class="progress-fill-load"></div></div>
+                </div>
+            </div>
+
+            <div class="card card-full">
+                <div class="card-label">Estimated Runtime</div>
+                <div class="card-value">{ups_runtime}</div>
+                <div class="card-subtext">Remaining backup timeline</div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Input Voltage</div>
+                <div class="card-value">{input_voltage} V</div>
+                <div class="card-subtext">Nominal: {input_voltage_nominal}V AC</div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Battery Voltage</div>
+                <div class="card-value">{battery_voltage} V</div>
+                <div class="card-subtext">Nominal: {battery_voltage_nominal}V DC</div>
+            </div>
+        </div>
+
+        <footer>
+            <div class="links">
+                <span>Real-time tracking</span>
+                <a href="/api/status" target="_blank">JSON API</a>
+            </div>
+            <button class="btn-refresh" onclick="window.location.reload()">Refresh</button>
+        </footer>
+    </div>
+</body>
+</html>

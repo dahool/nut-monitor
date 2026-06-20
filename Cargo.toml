@@ -5,12 +5,14 @@ edition = "2021"
 
 [dependencies]
 axum = "0.7"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
+reqwest = { version = "0.12", features = ["json"] }
 jsonwebtoken = "9.0"
 chrono = "0.4"
-rusqlite = { version = "0.31", features = ["bundled"] }
-
-# Turn off default features (which include native-tls) and use rustls
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Logging dependencies
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower-http = { version = "0.5", features = ["trace"] }

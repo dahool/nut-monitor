@@ -11,13 +11,17 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use rusqlite::{Connection, params};
+// Added for comprehensive logging
+use tower_http::trace::TraceLayer;
+use tracing::{info, warn, error, Level};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 struct AppState {
     ups_name: String,
     ups_host: String,
     fcm_config: Option<FcmConfig>,
     last_alerts: Mutex<LastAlertState>,
-    db_conn: Mutex<Connection>, // Thread-safe local SQLite connection
+    db_conn: Mutex<Connection>,
 }
 
 struct FcmConfig {
@@ -61,29 +65,39 @@ const HTML_TEMPLATE: &str = include_str!("template.html");
 
 #[tokio::main]
 async fn main() {
+    // Initialize the tracing subscriber for clean stdout logging
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "nut_monitor=info,tower_http=info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    info!("Initializing NUT Monitor Server...");
+
     let ups_name = env::var("UPS_NAME").unwrap_or_else(|_| "ups".to_string());
     let ups_host = env::var("UPS_HOST").unwrap_or_else(|_| "localhost".to_string());
     
-    // Configurable monitor interval via environment variable (default: 10 seconds)
     let interval_secs = env::var("MONITOR_INTERVAL_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(10);
 
-    // Extracted FCM config
     let fcm_config = if let (Ok(pid), Ok(email), Ok(key)) = (
         env::var("FCM_PROJECT_ID"), env::var("FCM_CLIENT_EMAIL"), env::var("FCM_PRIVATE_KEY")
     ) {
+        info!("FCM configuration loaded successfully for project: {}", pid);
         Some(FcmConfig {
             project_id: pid,
             client_email: email,
             private_key: key.replace("\\n", "\n"),
         })
     } else {
+        warn!("FCM environment variables missing. Notifications will be disabled.");
         None
     };
 
-    // Initialize Local SQLite Database
     let conn = Connection::open("devices.db").expect("Failed to open database");
     conn.execute(
         "CREATE TABLE IF NOT EXISTS devices (
@@ -102,26 +116,27 @@ async fn main() {
         db_conn: Mutex::new(conn),
     });
 
-    // Background alert loop using configurable intervals
     let monitor_state = shared_state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        println!("Background monitoring thread initialized. Polling interval: {}s", interval_secs);
+        info!("Background monitoring loop started. Interval: {}s", interval_secs);
         loop {
             interval.tick().await;
             evaluate_alerts(&monitor_state).await;
         }
     });
 
+    // Added TraceLayer::new_for_http() to catch all API communications
     let app = Router::new()
         .route("/", get(html_handler))
         .route("/api/status", get(json_handler))
         .route("/api/register", post(register_device_handler))
-        .route("/api/test-fcm", post(test_fcm_handler)) // New Manual Test Route
+        .route("/api/test-fcm", post(test_fcm_handler))
+        .layer(TraceLayer::new_for_http())
         .with_state(shared_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("NUT Monitor server running on http://0.0.0.0:3000");
+    info!("NUT Monitor server running on http://0.0.0.0:3000");
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -131,6 +146,7 @@ async fn register_device_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<RegisterDeviceRequest>,
 ) -> StatusCode {
+    info!("Registration attempt received for device ID: {}", payload.device_id);
     let db = state.db_conn.lock().unwrap();
     
     let res = db.execute(
@@ -139,26 +155,33 @@ async fn register_device_handler(
     );
 
     match res {
-        Ok(_) => StatusCode::OK,
+        Ok(_) => {
+            info!("Successfully registered/updated device: {}", payload.device_name);
+            StatusCode::OK
+        }
         Err(e) => {
-            eprintln!("Database error: {}", e);
+            error!("Database write failure during device registration: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
 }
 
-// Handler to trigger test FCM notifications on demand
 async fn test_fcm_handler(State(state): State<Arc<AppState>>) -> (StatusCode, Json<serde_json::Value>) {
+    info!("Manual FCM test triggered via /api/test-fcm");
     let config = match &state.fcm_config {
         Some(c) => c,
-        None => return (
-            StatusCode::BAD_REQUEST, 
-            Json(serde_json::json!({ "error": "FCM configurations are missing from environment vars" }))
-        ),
+        None => {
+            warn!("FCM test skipped: Missing configurations");
+            return (
+                StatusCode::BAD_REQUEST, 
+                Json(serde_json::json!({ "error": "FCM configurations are missing from environment vars" }))
+            );
+        }
     };
 
     let tokens = get_registered_tokens(&state);
     if tokens.is_empty() {
+        info!("FCM test run canceled: 0 devices found in database.");
         return (
             StatusCode::OK,
             Json(serde_json::json!({ "message": "FCM is configured but no devices are registered in database yet." }))
@@ -174,6 +197,8 @@ async fn test_fcm_handler(State(state): State<Arc<AppState>>) -> (StatusCode, Js
             successful_sends += 1;
         }
     }
+
+    info!("FCM Test broadcast completed. Sent {} successfully out of {} targets.", successful_sends, tokens.len());
 
     (
         StatusCode::OK,
@@ -205,7 +230,6 @@ async fn evaluate_alerts(state: &AppState) {
     {
         let mut alerts = state.last_alerts.lock().unwrap();
 
-        // 1. Status Change Check
         if !alerts.last_status.is_empty() && alerts.last_status != m.status {
             trigger = true;
             title = format!("UPS Status Changed: {}", m.status);
@@ -213,7 +237,6 @@ async fn evaluate_alerts(state: &AppState) {
         }
         alerts.last_status = m.status.clone();
 
-        // 2. Battery Drop Threshold (< 50%)
         if let Ok(charge) = m.battery_charge.parse::<u32>() {
             if charge < 50 {
                 if !alerts.battery_low_sent {
@@ -225,7 +248,6 @@ async fn evaluate_alerts(state: &AppState) {
             } else { alerts.battery_low_sent = false; }
         }
 
-        // 3. Load Capacity Alert (> 80%)
         if let Ok(load) = m.ups_load.parse::<u32>() {
             if load > 80 {
                 if !alerts.load_high_sent {
@@ -237,7 +259,6 @@ async fn evaluate_alerts(state: &AppState) {
             } else { alerts.load_high_sent = false; }
         }
 
-        // 4. Runtime Alert (< 15 min / 900 seconds)
         if let Ok(seconds) = m.runtime_seconds.parse::<u32>() {
             if seconds < 900 {
                 if !alerts.runtime_low_sent {
@@ -253,6 +274,7 @@ async fn evaluate_alerts(state: &AppState) {
     if trigger {
         if let Some(ref config) = state.fcm_config {
             let tokens = get_registered_tokens(state);
+            info!("System threshold triggered. Broadcasting alert notifications to {} devices...", tokens.len());
             for token in tokens {
                 let _ = send_fcm_v1_notification(config, &token, &title, &message).await;
             }
@@ -261,6 +283,10 @@ async fn evaluate_alerts(state: &AppState) {
 }
 
 async fn send_fcm_v1_notification(config: &FcmConfig, device_token: &str, title: &str, body: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Truncated token presentation for data protection in logs
+    let truncated_token = if device_token.len() > 12 { &device_token[..12] } else { device_token };
+    info!("Dispatching FCM notification to token starting with: {}... Title: \"{}\"", truncated_token, title);
+
     let client = reqwest::Client::new();
     let now = chrono::Utc::now().timestamp();
     
@@ -280,7 +306,11 @@ async fn send_fcm_v1_notification(config: &FcmConfig, device_token: &str, title:
         .form(&[("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"), ("assertion", &jwt)])
         .send().await?.json().await?;
 
-    let access_token = token_res["access_token"].as_str().ok_or("Failed parsing access token")?;
+    let access_token = token_res["access_token"].as_str().ok_or_else(|| {
+        error!("FCM authentication missing token property in Google response structural schema");
+        "Failed parsing access token"
+    })?;
+    
     let url = format!("https://fcm.googleapis.com/v1/projects/{}/messages:send", config.project_id);
     
     let payload = serde_json::json!({
@@ -291,8 +321,16 @@ async fn send_fcm_v1_notification(config: &FcmConfig, device_token: &str, title:
         }
     });
 
-    client.post(&url).bearer_auth(access_token).json(&payload).send().await?;
-    Ok(())
+    let res = client.post(&url).bearer_auth(access_token).json(&payload).send().await?;
+    
+    if res.status().is_success() {
+        info!("Successfully delivered FCM notification payload to device token instance.");
+        Ok(())
+    } else {
+        let err_text = res.text().await.unwrap_or_default();
+        error!("FCM transmission rejection from Google Gateway API service: {}", err_text);
+        Err("FCM service delivery failure".into())
+    }
 }
 
 // --- Retained Handlers (Unchanged logic) ---

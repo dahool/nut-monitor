@@ -64,7 +64,13 @@ async fn main() {
     let ups_name = env::var("UPS_NAME").unwrap_or_else(|_| "ups".to_string());
     let ups_host = env::var("UPS_HOST").unwrap_or_else(|_| "localhost".to_string());
     
-    // Extracted FCM config (FCM_DEVICE_TOKEN is no longer required here)
+    // Configurable monitor interval via environment variable (default: 10 seconds)
+    let interval_secs = env::var("MONITOR_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(10);
+
+    // Extracted FCM config
     let fcm_config = if let (Ok(pid), Ok(email), Ok(key)) = (
         env::var("FCM_PROJECT_ID"), env::var("FCM_CLIENT_EMAIL"), env::var("FCM_PRIVATE_KEY")
     ) {
@@ -96,10 +102,11 @@ async fn main() {
         db_conn: Mutex::new(conn),
     });
 
-    // Background alert loop
+    // Background alert loop using configurable intervals
     let monitor_state = shared_state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+        println!("Background monitoring thread initialized. Polling interval: {}s", interval_secs);
         loop {
             interval.tick().await;
             evaluate_alerts(&monitor_state).await;
@@ -109,7 +116,8 @@ async fn main() {
     let app = Router::new()
         .route("/", get(html_handler))
         .route("/api/status", get(json_handler))
-        .route("/api/register", post(register_device_handler)) // New Endpoint
+        .route("/api/register", post(register_device_handler))
+        .route("/api/test-fcm", post(test_fcm_handler)) // New Manual Test Route
         .with_state(shared_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -125,7 +133,6 @@ async fn register_device_handler(
 ) -> StatusCode {
     let db = state.db_conn.lock().unwrap();
     
-    // INSERT or REPLACE if device_id already exists (updates token/name)
     let res = db.execute(
         "INSERT OR REPLACE INTO devices (device_id, device_name, device_token) VALUES (?1, ?2, ?3)",
         params![payload.device_id, payload.device_name, payload.device_token],
@@ -140,7 +147,52 @@ async fn register_device_handler(
     }
 }
 
+// Handler to trigger test FCM notifications on demand
+async fn test_fcm_handler(State(state): State<Arc<AppState>>) -> (StatusCode, Json<serde_json::Value>) {
+    let config = match &state.fcm_config {
+        Some(c) => c,
+        None => return (
+            StatusCode::BAD_REQUEST, 
+            Json(serde_json::json!({ "error": "FCM configurations are missing from environment vars" }))
+        ),
+    };
+
+    let tokens = get_registered_tokens(&state);
+    if tokens.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "message": "FCM is configured but no devices are registered in database yet." }))
+        );
+    }
+
+    let title = "⚠️ Test Notification";
+    let message = "This is a test notification generated from your NUT Monitor endpoint.";
+
+    let mut successful_sends = 0;
+    for token in &tokens {
+        if send_fcm_v1_notification(config, token, title, message).await.is_ok() {
+            successful_sends += 1;
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "Test completed",
+            "targets_found": tokens.len(),
+            "successfully_sent": successful_sends
+        }))
+    )
+}
+
 // --- Alert Evaluation & Notification Utilities ---
+
+fn get_registered_tokens(state: &AppState) -> Vec<String> {
+    let db = state.db_conn.lock().unwrap();
+    let mut stmt = db.prepare("SELECT device_token FROM devices").unwrap();
+    let token_iter = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
+    token_iter.filter_map(|t| t.ok()).collect::<Vec<String>>()
+}
 
 async fn evaluate_alerts(state: &AppState) {
     let m = fetch_ups_metrics(state);
@@ -150,8 +202,6 @@ async fn evaluate_alerts(state: &AppState) {
     let mut title = String::new();
     let mut message = String::new();
 
-    // Limit the scope of the `alerts` and `db_conn` Mutex locks completely.
-    // By enclosing this in a block, the locks are automatically dropped at the final `}`
     {
         let mut alerts = state.last_alerts.lock().unwrap();
 
@@ -198,20 +248,11 @@ async fn evaluate_alerts(state: &AppState) {
                 }
             } else { alerts.runtime_low_sent = false; }
         }
-    } // <-- `alerts` MutexGuard is dropped right here!
+    }
 
-    // Now it is safe to await network requests because no locks are held
     if trigger {
         if let Some(ref config) = state.fcm_config {
-            // Read tokens into a local vector, locking and unlocking immediately
-            let tokens = {
-                let db = state.db_conn.lock().unwrap();
-                let mut stmt = db.prepare("SELECT device_token FROM devices").unwrap();
-                let token_iter = stmt.query_map([], |row| row.get::<_, String>(0)).unwrap();
-                token_iter.filter_map(|t| t.ok()).collect::<Vec<String>>()
-            }; // <-- `db` MutexGuard is dropped right here!
-
-            // Loop through all saved devices and broadcast notifications safely
+            let tokens = get_registered_tokens(state);
             for token in tokens {
                 let _ = send_fcm_v1_notification(config, &token, &title, &message).await;
             }
@@ -244,7 +285,7 @@ async fn send_fcm_v1_notification(config: &FcmConfig, device_token: &str, title:
     
     let payload = serde_json::json!({
         "message": {
-            "token": device_token, // Token now parsed dynamically per-device
+            "token": device_token,
             "notification": { "title": title, "body": body },
             "android": { "priority": "high", "notification": { "sound": "default", "channel_id": "ups_alerts" } }
         }

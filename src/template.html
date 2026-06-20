@@ -3,10 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NUT UPS Monitor</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>UPS Monitor</title>
     <style>
         :root {
             --bg-main: #0b0f17;
@@ -19,12 +16,16 @@
             --success: #50fa7b;
             --warning: #ffb86c;
             --danger: #ff5555;
+            
+            /* Clean, modern system font fallback chains */
+            --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            font-family: 'Inter', sans-serif;
+            font-family: var(--font-sans);
             background-color: var(--bg-main);
             color: var(--text-primary);
             display: flex;
@@ -63,7 +64,7 @@
         header p {
             font-size: 0.85rem;
             color: var(--text-secondary);
-            font-family: 'JetBrains Mono', monospace;
+            font-family: var(--font-mono);
             margin-top: 4px;
         }
 
@@ -107,7 +108,7 @@
         .card-value {
             font-size: 1.6rem;
             font-weight: 600;
-            font-family: 'JetBrains Mono', monospace;
+            font-family: var(--font-mono);
             color: #ffffff;
         }
 
@@ -153,12 +154,96 @@
             transition: width 0.6s ease;
         }
 
+        .abm-section {
+            margin-top: 24px;
+            border-top: 1px dashed var(--border);
+            padding-top: 24px;
+        }
+
+        .abm-title {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent-purple);
+            font-weight: 700;
+            margin-bottom: 14px;
+        }
+
+        .device-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .device-list::-webkit-scrollbar {
+            width: 4px;
+        }
+        .device-list::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 2px;
+        }
+
+        .device-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 16px;
+        }
+
+        .device-info h4 {
+            font-size: 0.85rem;
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        .device-info p {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 320px;
+        }
+
+        .btn-delete {
+            background-color: transparent;
+            border: 1px solid rgba(255, 85, 85, 0.3);
+            color: var(--danger);
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        .btn-delete:hover {
+            background-color: rgba(255, 85, 85, 0.1);
+            border-color: var(--danger);
+        }
+
+        .empty-devices {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            font-style: italic;
+            text-align: center;
+            padding: 12px 0;
+        }
+
         footer {
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-top: 1px solid var(--border);
             padding-top: 20px;
+            margin-top: 24px;
             font-size: 0.8rem;
             color: var(--text-secondary);
         }
@@ -200,8 +285,60 @@
         }
     </style>
     <script>
-        // Auto-refresh HTML dashboard every 10s
-        setInterval(() => { window.location.reload(); }, 10000);
+        setInterval(() => { window.location.reload(); }, 15000);
+
+        async function fetchRegisteredDevices() {
+            try {
+                const response = await fetch('/api/devices');
+                const devices = await response.json();
+                const container = document.getElementById('deviceListContainer');
+                
+                if (!devices || devices.length === 0) {
+                    container.innerHTML = '<div class="empty-devices">No endpoints registered for push notifications</div>';
+                    return;
+                }
+
+                container.innerHTML = devices.map(device => `
+                    <div class="device-row" id="device-row-${device.device_id}">
+                        <div class="device-info">
+                            <h4>${escapeHtml(device.device_name)}</h4>
+                            <p>ID: ${escapeHtml(device.device_id)} | Token: ${escapeHtml(device.device_token)}</p>
+                        </div>
+                        <button class="btn-delete" onclick="deleteDevice('${device.device_id}')">Remove</button>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error("Failed to query runtime tokens:", error);
+                document.getElementById('deviceListContainer').innerHTML = '<div class="empty-devices" style="color: var(--danger);">Failed to load devices</div>';
+            }
+        }
+
+        async function deleteDevice(deviceId) {
+            if (!confirm("Are you sure you want to completely deregister this receiver target?")) return;
+            
+            try {
+                const response = await fetch(`/api/devices/${deviceId}`, { method: 'DELETE' });
+                if (response.ok) {
+                    const element = document.getElementById(`device-row-${deviceId}`);
+                    if (element) element.remove();
+                    
+                    const container = document.getElementById('deviceListContainer');
+                    if (container.children.length === 0) {
+                        container.innerHTML = '<div class="empty-devices">No endpoints registered for push notifications</div>';
+                    }
+                } else {
+                    alert("System failed handling termination instructions.");
+                }
+            } catch (error) {
+                console.error("ABM modification error context:", error);
+            }
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+
+        window.addEventListener('DOMContentLoaded', fetchRegisteredDevices);
     </script>
 </head>
 <body>
@@ -251,6 +388,13 @@
                 <div class="card-label">Battery Voltage</div>
                 <div class="card-value">{battery_voltage} V</div>
                 <div class="card-subtext">Nominal: {battery_voltage_nominal}V DC</div>
+            </div>
+        </div>
+
+        <div class="abm-section">
+            <div class="abm-title">🔔 Registered Alert Receivers</div>
+            <div class="device-list" id="deviceListContainer">
+                <div class="empty-devices">Loading connected infrastructure targets...</div>
             </div>
         </div>
 

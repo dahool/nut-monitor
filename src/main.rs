@@ -1,8 +1,8 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::{Html, Json},
-    routing::{get, post},
+    routing::{get, post, delete},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -11,9 +11,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use rusqlite::{Connection, params};
-// Added for comprehensive logging
 use tower_http::trace::TraceLayer;
-use tracing::{info, warn, error, Level};
+use tracing::{info, warn, error};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 struct AppState {
@@ -54,7 +53,7 @@ struct UpsMetrics {
     runtime_formatted: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct RegisterDeviceRequest {
     device_token: String,
     device_name: String,
@@ -65,7 +64,6 @@ const HTML_TEMPLATE: &str = include_str!("template.html");
 
 #[tokio::main]
 async fn main() {
-    // Initialize the tracing subscriber for clean stdout logging
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -126,12 +124,13 @@ async fn main() {
         }
     });
 
-    // Added TraceLayer::new_for_http() to catch all API communications
     let app = Router::new()
         .route("/", get(html_handler))
         .route("/api/status", get(json_handler))
         .route("/api/register", post(register_device_handler))
         .route("/api/test-fcm", post(test_fcm_handler))
+        .route("/api/devices", get(get_devices_handler)) // List Devices API
+        .route("/api/devices/:id", delete(delete_device_handler)) // Remove Device API
         .layer(TraceLayer::new_for_http())
         .with_state(shared_state);
 
@@ -161,6 +160,45 @@ async fn register_device_handler(
         }
         Err(e) => {
             error!("Database write failure during device registration: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+async fn get_devices_handler(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Vec<RegisterDeviceRequest>>) {
+    let db = state.db_conn.lock().unwrap();
+    let mut stmt = db.prepare("SELECT device_id, device_name, device_token FROM devices").unwrap();
+    
+    let device_iter = stmt.query_map([], |row| {
+        Ok(RegisterDeviceRequest {
+            device_id: row.get(0)?,
+            device_name: row.get(1)?,
+            device_token: row.get(2)?,
+        })
+    }).unwrap();
+
+    let devices: Vec<RegisterDeviceRequest> = device_iter.filter_map(|d| d.ok()).collect();
+    (StatusCode::OK, Json(devices))
+}
+
+async fn delete_device_handler(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> StatusCode {
+    info!("Request to delete device received for ID: {}", id);
+    let db = state.db_conn.lock().unwrap();
+    
+    match db.execute("DELETE FROM devices WHERE device_id = ?1", params![id]) {
+        Ok(rows) if rows > 0 => {
+            info!("Successfully removed device record matching ID: {}", id);
+            StatusCode::OK
+        }
+        Ok(_) => {
+            warn!("No device match found for ID deletion candidate: {}", id);
+            StatusCode::NOT_FOUND
+        }
+        Err(e) => {
+            error!("Failed to complete transactional device delete execution sequence: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
@@ -283,7 +321,6 @@ async fn evaluate_alerts(state: &AppState) {
 }
 
 async fn send_fcm_v1_notification(config: &FcmConfig, device_token: &str, title: &str, body: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // Truncated token presentation for data protection in logs
     let truncated_token = if device_token.len() > 12 { &device_token[..12] } else { device_token };
     info!("Dispatching FCM notification to token starting with: {}... Title: \"{}\"", truncated_token, title);
 
@@ -332,8 +369,6 @@ async fn send_fcm_v1_notification(config: &FcmConfig, device_token: &str, title:
         Err("FCM service delivery failure".into())
     }
 }
-
-// --- Retained Handlers (Unchanged logic) ---
 
 fn fetch_ups_metrics(state: &AppState) -> UpsMetrics {
     let output = Command::new("upsc")

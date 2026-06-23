@@ -143,13 +143,13 @@
         }
         .progress-fill-charge {
             height: 100%;
-            width: {charge_pct}%;
+            width: {{ charge_pct }}%;
             background: linear-gradient(90deg, var(--accent-blue), #0077ff);
             transition: width 0.6s ease;
         }
         .progress-fill-load {
             height: 100%;
-            width: {load_pct}%;
+            width: {{ load_pct }}%;
             background: linear-gradient(90deg, var(--accent-purple), #7928ca);
             transition: width 0.6s ease;
         }
@@ -345,17 +345,17 @@
     <div class="dashboard">
         <header>
             <div>
-                <h1>{mfr_model}</h1>
-                <p>Node: {ups_name}@{ups_host}</p>
+                <h1>{{ mfr_model }}</h1>
+                <p>Node: {{ ups_name }}@{{ ups_host }}</p>
             </div>
-            <span class="status-badge {status_class}">{ups_status}</span>
+            <span class="status-badge {{ status_class }}">{{ ups_status }}</span>
         </header>
 
         <div class="grid">
             <div class="card card-full">
                 <div>
                     <div class="card-label">Battery Level</div>
-                    <div class="card-value">{battery_charge}%</div>
+                    <div class="card-value">{{ battery_charge }}%</div>
                 </div>
                 <div class="progress-wrapper">
                     <div class="progress-bg"><div class="progress-fill-charge"></div></div>
@@ -365,7 +365,8 @@
             <div class="card card-full">
                 <div>
                     <div class="card-label">Load Capacity</div>
-                    <div class="card-value">{ups_load}%</div>
+                    <div class="card-value">{{ ups_load }}%</div>
+                    <div class="card-subtext">Real Power: {{ ups_load_watt }} W</div>
                 </div>
                 <div class="progress-wrapper">
                     <div class="progress-bg"><div class="progress-fill-load"></div></div>
@@ -374,20 +375,20 @@
 
             <div class="card card-full">
                 <div class="card-label">Estimated Runtime</div>
-                <div class="card-value">{ups_runtime}</div>
+                <div class="card-value">{{ ups_runtime }}</div>
                 <div class="card-subtext">Remaining backup timeline</div>
             </div>
 
             <div class="card">
                 <div class="card-label">Input Voltage</div>
-                <div class="card-value">{input_voltage} V</div>
-                <div class="card-subtext">Nominal: {input_voltage_nominal}V AC</div>
+                <div class="card-value">{{ input_voltage }} V</div>
+                <div class="card-subtext">Nominal: {{ input_voltage_nominal }}V AC</div>
             </div>
 
             <div class="card">
                 <div class="card-label">Battery Voltage</div>
-                <div class="card-value">{battery_voltage} V</div>
-                <div class="card-subtext">Nominal: {battery_voltage_nominal}V DC</div>
+                <div class="card-value">{{ battery_voltage }} V</div>
+                <div class="card-subtext">Nominal: {{ battery_voltage_nominal }}V DC</div>
             </div>
         </div>
 

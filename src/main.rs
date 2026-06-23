@@ -248,6 +248,16 @@ async fn test_fcm_handler(State(state): State<Arc<AppState>>) -> (StatusCode, Js
     )
 }
 
+fn status_to_message(status: &str, fallback: String) -> String {
+    match status {
+        "OL CHRG" => "Online (Charging)".to_string(),
+        s if s.starts_with("OL") => "Online (AC)".to_string(),
+        s if s.starts_with("OB") => "On Battery".to_string(),
+        s if s.starts_with("LB") => "Low Battery ⚠️".to_string(),
+        _ => fallback,
+    }
+}
+
 // --- Alert Evaluation & Notification Utilities ---
 
 fn get_registered_tokens(state: &AppState) -> Vec<String> {
@@ -270,8 +280,9 @@ async fn evaluate_alerts(state: &AppState) {
 
         if !alerts.last_status.is_empty() && alerts.last_status != m.status {
             trigger = true;
-            title = format!("UPS Status Changed: {}", m.status);
-            message = format!("Device shifted from {} to {}.", alerts.last_status, m.status);
+            let msg_status = status_to_message(m.status.as_str(), m.status.clone());
+            title = format!("UPS Status Changed: {}", msg_status);
+            message = format!("Device shifted from {} to {}.", alerts.last_status, msg_status);
         }
         alerts.last_status = m.status.clone();
 
@@ -410,13 +421,8 @@ fn fetch_ups_metrics(state: &AppState) -> UpsMetrics {
                     "input.voltage.nominal" => m.input_voltage_nominal = val,
                     "ups.load" => m.ups_load = val,
                     "ups.status" => {
-                        m.status = match val.as_str() {
-                            "OL" => "Online (AC)".to_string(),
-                            "OB" => "On Battery".to_string(),
-                            "LB" => "Low Battery ⚠️".to_string(),
-                            _ => val,
-                        };
-                    }
+                        m.status = status_to_message(val.as_str(), val.clone());
+                    },
                     "battery.runtime" => {
                         m.runtime_seconds = val.clone();
                         if let Ok(seconds) = val.parse::<u32>() {
@@ -438,8 +444,9 @@ fn fetch_ups_metrics(state: &AppState) -> UpsMetrics {
 async fn html_handler(State(state): State<Arc<AppState>>) -> Html<String> {
     let m = fetch_ups_metrics(&state);
 
-    let status_class = match m.status.as_str() {
+    let status_class = match status_to_message(m.status.as_str(), m.status.clone()).as_str() {
         "Online (AC)" => "status-online",
+        "Online (Charging)" => "status-online",
         "On Battery" => "status-battery",
         "Low Battery ⚠️" => "status-critical",
         _ => "status-unknown",

@@ -14,6 +14,7 @@ RUN cargo build --release
 RUN rm -f src/main.rs target/release/deps/nut_monitor_web*
 
 # Copiar el código fuente real y compilar
+COPY templates ./templates
 COPY src ./src
 RUN cargo build --release
 

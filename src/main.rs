@@ -96,12 +96,18 @@ async fn main() {
         None
     };
 
-    let conn = Connection::open("devices.db").expect("Failed to open database");
+    let db_path = env::var("DATABASE_PATH").unwrap_or_else(|_| "/data/devices.db".to_string());
+    if let Some(parent) = std::path::Path::new(&db_path).parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            warn!("Could not create database directory {}: {}", parent.display(), e);
+        }
+    }
+    let conn = Connection::open(&db_path).expect("Failed to open database");
     conn.execute(
         "CREATE TABLE IF NOT EXISTS devices (
             device_id TEXT PRIMARY KEY,
             device_name TEXT NOT NULL,
-            device_token TEXT NOT NULL
+            device_token TEXT NOT NULL UNIQUE
         )",
         [],
     ).expect("Failed to create devices table");

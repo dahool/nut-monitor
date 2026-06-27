@@ -50,15 +50,23 @@ pub async fn evaluate_alerts(state: &AppState) {
             } else { alerts.load_high_sent = false; }
         }
 
-        if let Ok(seconds) = m.runtime_seconds.parse::<u32>() {
-            if seconds < 900 {
-                if !alerts.runtime_low_sent {
-                    trigger = true;
-                    title = "Alert: Critical Low Runtime".to_string();
-                    message = format!("UPS backup window is under 15 minutes ({} min remaining).", seconds / 60);
-                    alerts.runtime_low_sent = true;
-                }
-            } else { alerts.runtime_low_sent = false; }
+        // Modificado: Solo evalúa el runtime si está en batería ("OB" u "OB DISCHRG") o batería baja ("LB")
+        let is_on_battery = m.status.starts_with("OB") || m.status.starts_with("LB");
+
+        if is_on_battery {
+            if let Ok(seconds) = m.runtime_seconds.parse::<u32>() {
+                if seconds < 900 {
+                    if !alerts.runtime_low_sent {
+                        trigger = true;
+                        title = "Alert: Critical Low Runtime".to_string();
+                        message = format!("UPS backup window is under 15 minutes ({} min remaining).", seconds / 60);
+                        alerts.runtime_low_sent = true;
+                    }
+                } else { alerts.runtime_low_sent = false; }
+            }
+        } else {
+            // Si vuelve a la red eléctrica (AC), reseteamos el flag para que pueda volver a alertar en el futuro
+            alerts.runtime_low_sent = false;
         }
     }
 
